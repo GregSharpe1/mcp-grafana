@@ -82,37 +82,19 @@ type influxDBFrame struct {
 	} `json:"data"`
 }
 
-type influxDBClient struct {
-	httpClient *http.Client
-	baseURL    string
-}
-
-// newInfluxDBClient builds the HTTP client plumbing and returns it alongside
-// the resolved datasource. Callers that need datasource metadata (dialect
-// inference, jsonData) should reuse the returned *models.DataSource rather
-// than issuing a second getDatasourceByUID call.
-func newInfluxDBClient(ctx context.Context, uid string) (*influxDBClient, *models.DataSource, error) {
+// newInfluxDBDatasource verifies the datasource exists and is an InfluxDB
+// datasource, returning the datasource metadata for dialect inference.
+func newInfluxDBDatasource(ctx context.Context, uid string) (*models.DataSource, error) {
 	ds, err := getDatasourceByUID(ctx, GetDatasourceByUIDParams{UID: uid})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if ds.Type != InfluxDBDatasourceType {
-		return nil, nil, fmt.Errorf("datasource %s is of type %s, not %s", uid, ds.Type, InfluxDBDatasourceType)
+		return nil, fmt.Errorf("datasource %s is of type %s, not %s", uid, ds.Type, InfluxDBDatasourceType)
 	}
 
-	cfg := mcpgrafana.GrafanaConfigFromContext(ctx)
-	baseURL := cfg.URL
-
-	transport, err := mcpgrafana.BuildTransport(&cfg, nil)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create transport: %w", err)
-	}
-
-	return &influxDBClient{
-		httpClient: &http.Client{Transport: transport},
-		baseURL:    baseURL,
-	}, ds, nil
+	return ds, nil
 }
 
 // resolveInfluxDBDialect returns a canonical dialect string.
@@ -170,39 +152,43 @@ func buildInfluxDBPayload(datasourceUID, dialect, query string, from, to time.Ti
 	}
 }
 
-func (c *influxDBClient) query(ctx context.Context, payload map[string]interface{}) (*influxDBQueryResponse, error) {
+// doInfluxDBQuery posts payload to /api/ds/query and decodes into influxDBQueryResponse.
+// This uses a separate response type because InfluxDB needs json.RawMessage frames
+// for the RawFrames output field.
+func doInfluxDBQuery(ctx context.Context, payload map[string]interface{}) (*influxDBQueryResponse, error) {
+	client, baseURL, err := newDSQueryHTTPClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling query payload: %w", err)
 	}
 
-	url := c.baseURL + "/api/ds/query"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payloadBytes))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/ds/query", bytes.NewReader(payloadBytes))
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("executing request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("InfluxDB query returned status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var bytesLimit int64 = 1024 * 1024 * 10 // 10MB
-	body := io.LimitReader(resp.Body, bytesLimit)
-	bodyBytes, err := io.ReadAll(body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, dsQueryResponseLimit))
 	if err != nil {
 		return nil, fmt.Errorf("reading response body: %w", err)
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("InfluxDB query returned status %d: %s", resp.StatusCode, string(body[:min(len(body), 1024)]))
+	}
+
 	var queryResp influxDBQueryResponse
-	if err := unmarshalJSONWithLimitMsg(bodyBytes, &queryResp, int(bytesLimit)); err != nil {
+	if err := unmarshalJSONWithLimitMsg(body, &queryResp, dsQueryResponseLimit); err != nil {
 		return nil, err
 	}
 	return &queryResp, nil
@@ -254,7 +240,7 @@ func queryInfluxDB(ctx context.Context, args InfluxDBQueryParams) (*InfluxDBQuer
 		return nil, fmt.Errorf("query is required")
 	}
 
-	client, ds, err := newInfluxDBClient(ctx, args.DatasourceUID)
+	ds, err := newInfluxDBDatasource(ctx, args.DatasourceUID)
 	if err != nil {
 		return nil, fmt.Errorf("creating InfluxDB client: %w", err)
 	}
@@ -292,7 +278,7 @@ func queryInfluxDB(ctx context.Context, args InfluxDBQueryParams) (*InfluxDBQuer
 	}
 
 	payload := buildInfluxDBPayload(args.DatasourceUID, dialect, args.Query, fromTime, toTime, args.MaxDataPoints)
-	resp, err := client.query(ctx, payload)
+	resp, err := doInfluxDBQuery(ctx, payload)
 	if err != nil {
 		return nil, err
 	}

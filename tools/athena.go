@@ -41,6 +41,8 @@ var (
 	athenaLimitRe      = regexp.MustCompile(`(?i)\bLIMIT\s+(\d+)`)
 )
 
+// athenaClient is used for Athena plugin resource API calls (catalogs, databases,
+// tables, columns). Query execution goes through the shared doDSQuery path.
 type athenaClient struct {
 	httpClient *http.Client
 	baseURL    string
@@ -107,84 +109,6 @@ func (c *athenaClient) resource(ctx context.Context, path string, body map[strin
 		return nil, fmt.Errorf("reading athena resource %s response: %w", path, err)
 	}
 	return respBytes, nil
-}
-
-type athenaQueryResponse struct {
-	Results map[string]struct {
-		Status int `json:"status,omitempty"`
-		Frames []struct {
-			Schema struct {
-				Name   string `json:"name,omitempty"`
-				RefID  string `json:"refId,omitempty"`
-				Fields []struct {
-					Name     string `json:"name"`
-					Type     string `json:"type"`
-					TypeInfo struct {
-						Frame string `json:"frame,omitempty"`
-					} `json:"typeInfo,omitempty"`
-				} `json:"fields"`
-			} `json:"schema"`
-			Data struct {
-				Values [][]interface{} `json:"values"`
-			} `json:"data"`
-		} `json:"frames,omitempty"`
-		Error string `json:"error,omitempty"`
-	} `json:"results"`
-}
-
-func (c *athenaClient) query(ctx context.Context, rawSQL string, from, to time.Time, connectionArgs map[string]interface{}) (*athenaQueryResponse, error) {
-	queryMap := map[string]interface{}{
-		"datasource": map[string]string{
-			"uid":  c.uid,
-			"type": AthenaDatasourceType,
-		},
-		"rawSql":         rawSQL,
-		"refId":          "A",
-		"format":         AthenaFormatTable,
-		"connectionArgs": connectionArgs,
-	}
-
-	payload := map[string]interface{}{
-		"queries": []map[string]interface{}{queryMap},
-		"from":    strconv.FormatInt(from.UnixMilli(), 10),
-		"to":      strconv.FormatInt(to.UnixMilli(), 10),
-	}
-
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling query payload: %w", err)
-	}
-
-	url := c.baseURL + "/api/ds/query"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payloadBytes))
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	limitedBody := io.LimitReader(resp.Body, int64(athenaResponseLimitBytes))
-	if resp.StatusCode != http.StatusOK {
-		errBody, _ := io.ReadAll(limitedBody)
-		return nil, fmt.Errorf("athena query returned status %d: %s", resp.StatusCode, string(errBody))
-	}
-
-	respBytes, err := io.ReadAll(limitedBody)
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
-
-	var queryResp athenaQueryResponse
-	if err := unmarshalJSONWithLimitMsg(respBytes, &queryResp, athenaResponseLimitBytes); err != nil {
-		return nil, err
-	}
-
-	return &queryResp, nil
 }
 
 func substituteAthenaMacros(query string, from, to time.Time) string {
@@ -532,49 +456,43 @@ func queryAthena(ctx context.Context, args AthenaQueryParams) (*AthenaQueryResul
 		}
 	}
 
-	resp, err := client.query(ctx, processedQuery, fromTime, toTime, connectionArgs)
+	payload := map[string]interface{}{
+		"queries": []map[string]interface{}{
+			{
+				"datasource": map[string]string{
+					"uid":  client.uid,
+					"type": AthenaDatasourceType,
+				},
+				"rawSql":         processedQuery,
+				"refId":          "A",
+				"format":         AthenaFormatTable,
+				"connectionArgs": connectionArgs,
+			},
+		},
+		"from": strconv.FormatInt(fromTime.UnixMilli(), 10),
+		"to":   strconv.FormatInt(toTime.UnixMilli(), 10),
+	}
+
+	resp, err := doDSQuery(ctx, client.httpClient, client.baseURL, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	columns, rows, err := framesToTabularRows(resp)
 	if err != nil {
 		return nil, err
 	}
 
 	result := &AthenaQueryResult{
-		Columns:        []string{},
-		Rows:           []map[string]interface{}{},
+		Columns:        columns,
+		Rows:           rows,
+		RowCount:       len(rows),
 		ProcessedQuery: processedQuery,
 	}
 
-	for refID, r := range resp.Results {
-		if r.Error != "" {
-			return nil, fmt.Errorf("query error (refId=%s): %s", refID, r.Error)
-		}
-
-		for _, frame := range r.Frames {
-			columns := make([]string, len(frame.Schema.Fields))
-			for i, field := range frame.Schema.Fields {
-				columns[i] = field.Name
-			}
-			result.Columns = columns
-
-			if len(frame.Data.Values) == 0 {
-				continue
-			}
-
-			rowCount := len(frame.Data.Values[0])
-			for i := 0; i < rowCount; i++ {
-				row := make(map[string]interface{})
-				for colIdx, colName := range columns {
-					if colIdx < len(frame.Data.Values) && i < len(frame.Data.Values[colIdx]) {
-						row[colName] = frame.Data.Values[colIdx][i]
-					}
-				}
-				result.Rows = append(result.Rows, row)
-			}
-		}
-	}
-
-	result.RowCount = len(result.Rows)
-
 	if result.RowCount == 0 {
+		result.Columns = []string{}
+		result.Rows = []map[string]interface{}{}
 		result.Hints = GenerateEmptyResultHints(HintContext{
 			DatasourceType: "athena",
 			Query:          args.Query,

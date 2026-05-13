@@ -1,11 +1,8 @@
 package tools
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"path"
 	"strconv"
@@ -137,42 +134,9 @@ func (b *openSearchBackend) Search(ctx context.Context, index, query string, sta
 		"to":   toMs,
 	}
 
-	payloadBytes, err := json.Marshal(payload)
+	result, err := doDSQuery(ctx, b.httpClient, b.baseURL, payload)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling query payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", b.baseURL+"/api/ds/query", bytes.NewReader(payloadBytes))
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := b.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 48*1024*1024))
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		var errResult map[string]interface{}
-		if json.Unmarshal(bodyBytes, &errResult) == nil {
-			if errMsg, ok := errResult["message"].(string); ok {
-				return nil, fmt.Errorf("opensearch query failed: %s", errMsg)
-			}
-		}
-		return nil, fmt.Errorf("opensearch query failed with status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	// Parse the /api/ds/query response
-	var result dsQueryResponse
-	if err := json.Unmarshal(bodyBytes, &result); err != nil {
-		return nil, fmt.Errorf("unmarshalling response: %w", err)
+		return nil, err
 	}
 
 	queryResult, ok := result.Results["A"]

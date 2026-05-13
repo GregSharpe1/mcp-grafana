@@ -1,9 +1,7 @@
 package tools
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,31 +45,6 @@ type CloudWatchQueryResult struct {
 	Hints      []string           `json:"hints,omitempty"`
 }
 
-// cloudWatchQueryResponse represents the raw API response from Grafana's /api/ds/query
-type cloudWatchQueryResponse struct {
-	Results map[string]struct {
-		Status int `json:"status,omitempty"`
-		Frames []struct {
-			Schema struct {
-				Name   string `json:"name,omitempty"`
-				RefID  string `json:"refId,omitempty"`
-				Fields []struct {
-					Name     string                 `json:"name"`
-					Type     string                 `json:"type"`
-					Labels   map[string]string      `json:"labels,omitempty"`
-					Config   map[string]interface{} `json:"config,omitempty"`
-					TypeInfo struct {
-						Frame string `json:"frame,omitempty"`
-					} `json:"typeInfo,omitempty"`
-				} `json:"fields"`
-			} `json:"schema"`
-			Data struct {
-				Values [][]interface{} `json:"values"`
-			} `json:"data"`
-		} `json:"frames,omitempty"`
-		Error string `json:"error,omitempty"`
-	} `json:"results"`
-}
 
 // cloudWatchClient handles communication with Grafana's CloudWatch datasource
 type cloudWatchClient struct {
@@ -110,7 +83,7 @@ func newCloudWatchClient(ctx context.Context, uid string) (*cloudWatchClient, er
 }
 
 // query executes a CloudWatch query via Grafana's /api/ds/query endpoint
-func (c *cloudWatchClient) query(ctx context.Context, args CloudWatchQueryParams, from, to time.Time) (*cloudWatchQueryResponse, error) {
+func (c *cloudWatchClient) query(ctx context.Context, args CloudWatchQueryParams, from, to time.Time) (*dsQueryResponse, error) {
 	// Format dimensions for CloudWatch query
 	// CloudWatch expects dimensions as map[string][]string
 	dimensions := make(map[string][]string)
@@ -161,43 +134,7 @@ func (c *cloudWatchClient) query(ctx context.Context, args CloudWatchQueryParams
 		"to":      strconv.FormatInt(to.UnixMilli(), 10),
 	}
 
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling query payload: %w", err)
-	}
-
-	url := c.baseURL + "/api/ds/query"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payloadBytes))
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("CloudWatch query returned status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	// Limit size of response read
-	var bytesLimit int64 = 1024 * 1024 * 10 // 10MB limit
-	body := io.LimitReader(resp.Body, bytesLimit)
-	bodyBytes, err := io.ReadAll(body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
-
-	var queryResp cloudWatchQueryResponse
-	if err := unmarshalJSONWithLimitMsg(bodyBytes, &queryResp, int(bytesLimit)); err != nil {
-		return nil, err
-	}
-
-	return &queryResp, nil
+	return doDSQuery(ctx, c.httpClient, c.baseURL, payload)
 }
 
 // queryCloudWatch executes a CloudWatch query via Grafana
