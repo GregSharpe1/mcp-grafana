@@ -198,4 +198,3 @@ func (rt *postToGetRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 
 	return rt.underlying.RoundTrip(cloned)
 }
-

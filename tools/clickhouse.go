@@ -158,7 +158,7 @@ func queryClickHouse(ctx context.Context, args ClickHouseQueryParams) (*ClickHou
 	// Parse time range
 	now := time.Now()
 	fromTime := now.Add(-1 * time.Hour) // Default: 1 hour ago
-	toTime := now                        // Default: now
+	toTime := now                       // Default: now
 
 	if args.Start != "" {
 		parsed, err := parseStartTime(args.Start)

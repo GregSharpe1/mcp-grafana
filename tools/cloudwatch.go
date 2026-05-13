@@ -45,7 +45,6 @@ type CloudWatchQueryResult struct {
 	Hints      []string           `json:"hints,omitempty"`
 }
 
-
 // cloudWatchClient handles communication with Grafana's CloudWatch datasource
 type cloudWatchClient struct {
 	httpClient *http.Client
