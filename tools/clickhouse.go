@@ -220,8 +220,6 @@ func queryClickHouse(ctx context.Context, args ClickHouseQueryParams) (*ClickHou
 	}
 
 	if result.RowCount == 0 {
-		result.Columns = []string{}
-		result.Rows = []map[string]interface{}{}
 		result.Hints = GenerateEmptyResultHints(HintContext{
 			DatasourceType: "clickhouse",
 			Query:          args.Query,
