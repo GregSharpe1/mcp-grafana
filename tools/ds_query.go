@@ -50,6 +50,35 @@ type dsQueryFrameData struct {
 	Values [][]interface{} `json:"values"`
 }
 
+// doDSQueryBytes posts payload to /api/ds/query and returns the raw response
+// body and HTTP status code. It handles marshaling, request construction,
+// header setting, execution, and body reading with the given size limit.
+func doDSQueryBytes(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}, limit int64) ([]byte, int, error) {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, 0, fmt.Errorf("marshaling query payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/ds/query", bytes.NewReader(payloadBytes))
+	if err != nil {
+		return nil, 0, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("executing request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if err != nil {
+		return nil, 0, fmt.Errorf("reading response body: %w", err)
+	}
+
+	return body, resp.StatusCode, nil
+}
+
 // doDSQuery posts a payload to Grafana's /api/ds/query endpoint and decodes
 // the response into the shared dsQueryResponse type.
 func doDSQuery(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}) (*dsQueryResponse, error) {
@@ -58,30 +87,13 @@ func doDSQuery(ctx context.Context, client *http.Client, baseURL string, payload
 
 // doDSQueryWithLimit is like doDSQuery but allows overriding the response size limit.
 func doDSQueryWithLimit(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}, responseLimit int64) (*dsQueryResponse, error) {
-	payloadBytes, err := json.Marshal(payload)
+	body, statusCode, err := doDSQueryBytes(ctx, client, baseURL, payload, responseLimit)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling query payload: %w", err)
+		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/ds/query", bytes.NewReader(payloadBytes))
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, responseLimit))
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("query returned status %d: %s", resp.StatusCode, string(body[:min(len(body), 1024)]))
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("query returned status %d: %s", statusCode, string(body[:min(len(body), 1024)]))
 	}
 
 	var queryResp dsQueryResponse
@@ -96,36 +108,19 @@ func doDSQueryWithLimit(ctx context.Context, client *http.Client, baseURL string
 // JSON-decoded response as map[string]interface{}. Used by executeGrafanaDSQuery
 // to preserve the untyped API contract for run_panel_query callers.
 func doDSQueryRaw(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}) (map[string]interface{}, error) {
-	payloadBytes, err := json.Marshal(payload)
+	body, statusCode, err := doDSQueryBytes(ctx, client, baseURL, payload, dsQueryResponseLimit)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling query payload: %w", err)
+		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/ds/query", bytes.NewReader(payloadBytes))
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, dsQueryResponseLimit))
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
+	if statusCode != http.StatusOK {
 		var errResult map[string]interface{}
 		if json.Unmarshal(body, &errResult) == nil {
 			if errMsg, ok := errResult["message"].(string); ok {
 				return nil, fmt.Errorf("query failed: %s", errMsg)
 			}
 		}
-		return nil, fmt.Errorf("query failed with status %d: %s", resp.StatusCode, string(body[:min(len(body), 1024)]))
+		return nil, fmt.Errorf("query failed with status %d: %s", statusCode, string(body[:min(len(body), 1024)]))
 	}
 
 	var result map[string]interface{}

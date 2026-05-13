@@ -1,11 +1,9 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -161,30 +159,13 @@ func doInfluxDBQuery(ctx context.Context, payload map[string]interface{}) (*infl
 		return nil, err
 	}
 
-	payloadBytes, err := json.Marshal(payload)
+	body, statusCode, err := doDSQueryBytes(ctx, client, baseURL, payload, dsQueryResponseLimit)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling query payload: %w", err)
+		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/ds/query", bytes.NewReader(payloadBytes))
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, dsQueryResponseLimit))
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("InfluxDB query returned status %d: %s", resp.StatusCode, string(body[:min(len(body), 1024)]))
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("InfluxDB query returned status %d: %s", statusCode, string(body[:min(len(body), 1024)]))
 	}
 
 	var queryResp influxDBQueryResponse
