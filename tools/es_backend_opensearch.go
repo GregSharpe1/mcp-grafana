@@ -134,7 +134,7 @@ func (b *openSearchBackend) Search(ctx context.Context, index, query string, sta
 		"to":   toMs,
 	}
 
-	result, err := doDSQuery(ctx, b.httpClient, b.baseURL, payload)
+	result, err := doDSQueryWithLimit(ctx, b.httpClient, b.baseURL, payload, 48*1024*1024)
 	if err != nil {
 		return nil, err
 	}
