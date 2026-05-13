@@ -92,50 +92,6 @@ func doDSQueryWithLimit(ctx context.Context, client *http.Client, baseURL string
 	return &queryResp, nil
 }
 
-// doDSQueryRaw posts a payload to /api/ds/query and returns the raw
-// JSON-decoded response as map[string]interface{}. Used by executeGrafanaDSQuery
-// to preserve the untyped API contract for run_panel_query callers.
-func doDSQueryRaw(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}) (map[string]interface{}, error) {
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling query payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/ds/query", bytes.NewReader(payloadBytes))
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, dsQueryResponseLimit))
-	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		var errResult map[string]interface{}
-		if json.Unmarshal(body, &errResult) == nil {
-			if errMsg, ok := errResult["message"].(string); ok {
-				return nil, fmt.Errorf("query failed: %s", errMsg)
-			}
-		}
-		return nil, fmt.Errorf("query failed with status %d: %s", resp.StatusCode, string(body[:min(len(body), 1024)]))
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
-	}
-
-	return result, nil
-}
-
 func trimTrailingSlash(s string) string {
 	for len(s) > 0 && s[len(s)-1] == '/' {
 		s = s[:len(s)-1]

@@ -543,23 +543,18 @@ func executeInfluxDBQuery(ctx context.Context, datasourceUID string, panelData *
 }
 
 // executeGrafanaDSQuery executes a query through Grafana's /api/ds/query endpoint.
-// Returns the raw JSON-decoded response to preserve the existing untyped API contract.
 func executeGrafanaDSQuery(ctx context.Context, payload map[string]interface{}) (interface{}, error) {
 	client, baseURL, err := newDSQueryHTTPClient(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := doDSQueryRaw(ctx, client, baseURL, payload)
+	resp, err := doDSQuery(ctx, client, baseURL, payload)
 	if err != nil {
 		return nil, err
 	}
 
-	if results, ok := resp["results"].(map[string]interface{}); ok {
-		return results, nil
-	}
-
-	return resp, nil
+	return resp.Results, nil
 }
 
 // substituteGrafanaMacros substitutes Grafana temporal macros ($__range, $__rate_interval, $__interval)

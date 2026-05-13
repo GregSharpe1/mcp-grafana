@@ -127,25 +127,33 @@ func TestBuildInfluxDBPayload_SerializesToValidJSON(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestFramesToRows(t *testing.T) {
-	frame := `{
-		"schema": {
-			"name": "A",
-			"refId": "A",
-			"fields": [
-				{"name": "Time", "type": "time"},
-				{"name": "value", "type": "number"}
-			]
+func TestFramesToTabularRows_InfluxDB(t *testing.T) {
+	resp := &dsQueryResponse{
+		Results: map[string]dsQueryResult{
+			"A": {
+				Frames: []dsQueryFrame{
+					{
+						Schema: dsQueryFrameSchema{
+							Name:  "A",
+							RefID: "A",
+							Fields: []dsQueryFrameField{
+								{Name: "Time", Type: "time"},
+								{Name: "value", Type: "number"},
+							},
+						},
+						Data: dsQueryFrameData{
+							Values: [][]interface{}{
+								{float64(1705312800000), float64(1705312860000), float64(1705312920000)},
+								{1.0, 2.5, 3.7},
+							},
+						},
+					},
+				},
+			},
 		},
-		"data": {
-			"values": [
-				[1705312800000, 1705312860000, 1705312920000],
-				[1.0, 2.5, 3.7]
-			]
-		}
-	}`
+	}
 
-	cols, rows, err := framesToRows([]json.RawMessage{json.RawMessage(frame)})
+	cols, rows, err := framesToTabularRows(resp)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"Time", "value"}, cols)
@@ -155,15 +163,28 @@ func TestFramesToRows(t *testing.T) {
 	assert.Equal(t, 3.7, rows[2]["value"])
 }
 
-func TestFramesToRows_EmptyFrame(t *testing.T) {
-	frame := `{"schema": {"fields": [{"name": "Time"}]}, "data": {"values": []}}`
-	cols, rows, err := framesToRows([]json.RawMessage{json.RawMessage(frame)})
+func TestFramesToTabularRows_EmptyFrame(t *testing.T) {
+	resp := &dsQueryResponse{
+		Results: map[string]dsQueryResult{
+			"A": {
+				Frames: []dsQueryFrame{
+					{
+						Schema: dsQueryFrameSchema{
+							Fields: []dsQueryFrameField{
+								{Name: "Time"},
+							},
+						},
+						Data: dsQueryFrameData{
+							Values: [][]interface{}{},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	cols, rows, err := framesToTabularRows(resp)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Time"}, cols)
 	assert.Empty(t, rows)
-}
-
-func TestFramesToRows_InvalidJSON(t *testing.T) {
-	_, _, err := framesToRows([]json.RawMessage{json.RawMessage(`{not json`)})
-	require.Error(t, err)
 }
