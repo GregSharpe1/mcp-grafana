@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	mcpgrafana "github.com/grafana/mcp-grafana"
 )
@@ -153,15 +154,15 @@ func newDSQueryHTTPClient(ctx context.Context) (*http.Client, string, error) {
 		return nil, "", fmt.Errorf("failed to create transport: %w", err)
 	}
 
-	return &http.Client{Transport: transport}, baseURL, nil
+	return &http.Client{Transport: transport, Timeout: 30 * time.Second}, baseURL, nil
 }
 
 // framesToTabularRows converts columnar dsQueryFrame data into row-oriented
 // maps — the common format returned by ClickHouse, Snowflake, and Athena tools.
 // It returns the column names and the flattened rows.
 func framesToTabularRows(resp *dsQueryResponse) ([]string, []map[string]interface{}, error) {
-	var columns []string
-	var rows []map[string]interface{}
+	columns := []string{}
+	rows := []map[string]interface{}{}
 
 	for refID, r := range resp.Results {
 		if r.Error != "" {
