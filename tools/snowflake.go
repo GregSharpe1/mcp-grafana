@@ -219,8 +219,6 @@ func querySnowflake(ctx context.Context, args SnowflakeQueryParams) (*SnowflakeQ
 	}
 
 	if result.RowCount == 0 {
-		result.Columns = []string{}
-		result.Rows = []map[string]interface{}{}
 		result.Hints = GenerateEmptyResultHints(HintContext{
 			DatasourceType: "snowflake",
 			Query:          args.Query,
