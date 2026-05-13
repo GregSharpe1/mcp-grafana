@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 
 	mcpgrafana "github.com/grafana/mcp-grafana"
 )
@@ -113,7 +112,7 @@ func newDSQueryHTTPClient(ctx context.Context) (*http.Client, string, error) {
 		return nil, "", fmt.Errorf("failed to create transport: %w", err)
 	}
 
-	return &http.Client{Transport: transport, Timeout: 30 * time.Second}, baseURL, nil
+	return &http.Client{Transport: transport}, baseURL, nil
 }
 
 // framesToTabularRows converts columnar dsQueryFrame data into row-oriented
