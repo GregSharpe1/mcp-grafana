@@ -31,9 +31,10 @@ type dsQueryFrame struct {
 }
 
 type dsQueryFrameSchema struct {
-	Name   string              `json:"name,omitempty"`
-	RefID  string              `json:"refId,omitempty"`
-	Fields []dsQueryFrameField `json:"fields"`
+	Name   string                 `json:"name,omitempty"`
+	RefID  string                 `json:"refId,omitempty"`
+	Meta   map[string]interface{} `json:"meta,omitempty"`
+	Fields []dsQueryFrameField    `json:"fields"`
 }
 
 type dsQueryFrameField struct {
@@ -47,7 +48,9 @@ type dsQueryFrameField struct {
 }
 
 type dsQueryFrameData struct {
-	Values [][]interface{} `json:"values"`
+	Values   [][]interface{}        `json:"values"`
+	Nanos    [][]interface{}        `json:"nanos,omitempty"`
+	Entities map[string]interface{} `json:"entities,omitempty"`
 }
 
 // doDSQuery posts a payload to Grafana's /api/ds/query endpoint and decodes
