@@ -171,7 +171,7 @@ func queryInfluxDB(ctx context.Context, args InfluxDBQueryParams) (*InfluxDBQuer
 		return nil, err
 	}
 
-	resp, err := doDSQuery(ctx, client, baseURL, payload)
+	resp, bodyBytes, err := doDSQueryWithBody(ctx, client, baseURL, payload, dsQueryResponseLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -190,13 +190,23 @@ func queryInfluxDB(ctx context.Context, args InfluxDBQueryParams) (*InfluxDBQuer
 
 	// Preserve the raw frames so callers that want the native
 	// Grafana shape (timestamps + labels per field) can still get it.
-	for _, r := range resp.Results {
-		if len(r.Frames) > 0 {
-			rawFramesJSON, err := json.Marshal(r.Frames)
-			if err == nil {
-				result.RawFrames = rawFramesJSON
+	// We extract frames from the raw body bytes to avoid data loss from
+	// the typed dsQueryFrame struct (which omits schema.meta, data.nanos, etc.).
+	type rawResult struct {
+		Results map[string]struct {
+			Frames []json.RawMessage `json:"frames,omitempty"`
+		} `json:"results"`
+	}
+	var raw rawResult
+	if err := json.Unmarshal(bodyBytes, &raw); err == nil {
+		for _, r := range raw.Results {
+			if len(r.Frames) > 0 {
+				rawFramesJSON, err := json.Marshal(r.Frames)
+				if err == nil {
+					result.RawFrames = rawFramesJSON
+				}
+				break
 			}
-			break
 		}
 	}
 

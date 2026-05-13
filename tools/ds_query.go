@@ -53,43 +53,52 @@ type dsQueryFrameData struct {
 // doDSQuery posts a payload to Grafana's /api/ds/query endpoint and decodes
 // the response into the shared dsQueryResponse type.
 func doDSQuery(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}) (*dsQueryResponse, error) {
-	return doDSQueryWithLimit(ctx, client, baseURL, payload, dsQueryResponseLimit)
+	resp, _, err := doDSQueryWithBody(ctx, client, baseURL, payload, dsQueryResponseLimit)
+	return resp, err
 }
 
 // doDSQueryWithLimit is like doDSQuery but allows overriding the response size limit.
 func doDSQueryWithLimit(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}, responseLimit int64) (*dsQueryResponse, error) {
+	resp, _, err := doDSQueryWithBody(ctx, client, baseURL, payload, responseLimit)
+	return resp, err
+}
+
+// doDSQueryWithBody is like doDSQuery but also returns the raw response body
+// bytes. Callers that need to preserve the exact JSON (e.g. for RawFrames)
+// should use this variant.
+func doDSQueryWithBody(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}, responseLimit int64) (*dsQueryResponse, []byte, error) {
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling query payload: %w", err)
+		return nil, nil, fmt.Errorf("marshaling query payload: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/ds/query", bytes.NewReader(payloadBytes))
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
+		return nil, nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("executing request: %w", err)
+		return nil, nil, fmt.Errorf("executing request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, responseLimit))
 	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
+		return nil, nil, fmt.Errorf("reading response body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("query returned status %d: %s", resp.StatusCode, string(body[:min(len(body), 1024)]))
+		return nil, nil, fmt.Errorf("query returned status %d: %s", resp.StatusCode, string(body[:min(len(body), 1024)]))
 	}
 
 	var queryResp dsQueryResponse
 	if err := unmarshalJSONWithLimitMsg(body, &queryResp, int(responseLimit)); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return &queryResp, nil
+	return &queryResp, body, nil
 }
 
 func trimTrailingSlash(s string) string {
