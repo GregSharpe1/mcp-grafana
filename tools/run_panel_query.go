@@ -543,6 +543,8 @@ func executeInfluxDBQuery(ctx context.Context, datasourceUID string, panelData *
 }
 
 // executeGrafanaDSQuery executes a query through Grafana's /api/ds/query endpoint
+// and returns just the inner results map (not the full envelope) so that the
+// caller can embed it directly in PanelQueryResult.Results without double-nesting.
 func executeGrafanaDSQuery(ctx context.Context, payload map[string]interface{}) (interface{}, error) {
 	client, baseURL, err := newDSQueryHTTPClient(ctx)
 	if err != nil {
@@ -554,7 +556,7 @@ func executeGrafanaDSQuery(ctx context.Context, payload map[string]interface{}) 
 		return nil, err
 	}
 
-	return resp, nil
+	return resp.Results, nil
 }
 
 // substituteGrafanaMacros substitutes Grafana temporal macros ($__range, $__rate_interval, $__interval)

@@ -52,6 +52,12 @@ type dsQueryFrameData struct {
 // doDSQuery posts a payload to Grafana's /api/ds/query endpoint and decodes
 // the response into the shared dsQueryResponse type.
 func doDSQuery(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}) (*dsQueryResponse, error) {
+	return doDSQueryWithLimit(ctx, client, baseURL, payload, dsQueryResponseLimit)
+}
+
+// doDSQueryWithLimit is like doDSQuery but allows the caller to specify a
+// custom response-size limit (in bytes).
+func doDSQueryWithLimit(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}, limit int64) (*dsQueryResponse, error) {
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling query payload: %w", err)
@@ -69,7 +75,7 @@ func doDSQuery(ctx context.Context, client *http.Client, baseURL string, payload
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, dsQueryResponseLimit))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return nil, fmt.Errorf("reading response body: %w", err)
 	}
@@ -79,7 +85,7 @@ func doDSQuery(ctx context.Context, client *http.Client, baseURL string, payload
 	}
 
 	var queryResp dsQueryResponse
-	if err := unmarshalJSONWithLimitMsg(body, &queryResp, dsQueryResponseLimit); err != nil {
+	if err := unmarshalJSONWithLimitMsg(body, &queryResp, int(limit)); err != nil {
 		return nil, err
 	}
 

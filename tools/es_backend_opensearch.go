@@ -134,7 +134,8 @@ func (b *openSearchBackend) Search(ctx context.Context, index, query string, sta
 		"to":   toMs,
 	}
 
-	result, err := doDSQuery(ctx, b.httpClient, b.baseURL, payload)
+	const openSearchResponseLimit = 48 * 1024 * 1024 // 48MB — OpenSearch raw document queries can be large
+	result, err := doDSQueryWithLimit(ctx, b.httpClient, b.baseURL, payload, openSearchResponseLimit)
 	if err != nil {
 		return nil, err
 	}
