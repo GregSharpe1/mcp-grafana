@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -355,12 +356,6 @@ func TestAthenaQuery_PayloadStructure(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	client := &athenaClient{
-		httpClient: http.DefaultClient,
-		baseURL:    ts.URL,
-		uid:        "test-uid",
-	}
-
 	from := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
 	to := time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC)
 	connArgs := map[string]interface{}{
@@ -369,7 +364,24 @@ func TestAthenaQuery_PayloadStructure(t *testing.T) {
 		"database": "mydb",
 	}
 
-	resp, err := client.query(t.Context(), "SELECT * FROM logs", from, to, connArgs)
+	payload := map[string]interface{}{
+		"queries": []map[string]interface{}{
+			{
+				"datasource": map[string]string{
+					"uid":  "test-uid",
+					"type": AthenaDatasourceType,
+				},
+				"rawSql":         "SELECT * FROM logs",
+				"refId":          "A",
+				"format":         AthenaFormatTable,
+				"connectionArgs": connArgs,
+			},
+		},
+		"from": strconv.FormatInt(from.UnixMilli(), 10),
+		"to":   strconv.FormatInt(to.UnixMilli(), 10),
+	}
+
+	resp, err := doDSQuery(t.Context(), http.DefaultClient, ts.URL, payload)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.Len(t, resp.Results, 1)
@@ -381,73 +393,38 @@ func TestAthenaQuery_NonOKStatus(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	client := &athenaClient{
-		httpClient: http.DefaultClient,
-		baseURL:    ts.URL,
-		uid:        "test-uid",
-	}
-
 	from := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
 	to := time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC)
 
-	_, err := client.query(t.Context(), "SELECT 1", from, to, map[string]interface{}{})
+	payload := map[string]interface{}{
+		"queries": []map[string]interface{}{
+			{
+				"datasource": map[string]string{
+					"uid":  "test-uid",
+					"type": AthenaDatasourceType,
+				},
+				"rawSql": "SELECT 1",
+				"refId":  "A",
+				"format": AthenaFormatTable,
+			},
+		},
+		"from": strconv.FormatInt(from.UnixMilli(), 10),
+		"to":   strconv.FormatInt(to.UnixMilli(), 10),
+	}
+
+	_, err := doDSQuery(t.Context(), http.DefaultClient, ts.URL, payload)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "400")
 }
 
 func TestAthenaQuery_FrameToRows(t *testing.T) {
-	resp := athenaQueryResponse{
-		Results: map[string]struct {
-			Status int `json:"status,omitempty"`
-			Frames []struct {
-				Schema struct {
-					Name   string `json:"name,omitempty"`
-					RefID  string `json:"refId,omitempty"`
-					Fields []struct {
-						Name     string `json:"name"`
-						Type     string `json:"type"`
-						TypeInfo struct {
-							Frame string `json:"frame,omitempty"`
-						} `json:"typeInfo,omitempty"`
-					} `json:"fields"`
-				} `json:"schema"`
-				Data struct {
-					Values [][]interface{} `json:"values"`
-				} `json:"data"`
-			} `json:"frames,omitempty"`
-			Error string `json:"error,omitempty"`
-		}{},
-	}
-
 	rawJSON := `{"results":{"A":{"status":200,"frames":[{"schema":{"fields":[{"name":"name","type":"string"},{"name":"age","type":"number"}]},"data":{"values":[["Alice","Bob"],[30,25]]}}]}}}`
+
+	var resp dsQueryResponse
 	require.NoError(t, json.Unmarshal([]byte(rawJSON), &resp))
 
-	var columns []string
-	var rows []map[string]interface{}
-
-	for _, r := range resp.Results {
-		for _, frame := range r.Frames {
-			columns = make([]string, len(frame.Schema.Fields))
-			for i, field := range frame.Schema.Fields {
-				columns[i] = field.Name
-			}
-
-			if len(frame.Data.Values) == 0 {
-				continue
-			}
-
-			rowCount := len(frame.Data.Values[0])
-			for i := 0; i < rowCount; i++ {
-				row := make(map[string]interface{})
-				for colIdx, colName := range columns {
-					if colIdx < len(frame.Data.Values) && i < len(frame.Data.Values[colIdx]) {
-						row[colName] = frame.Data.Values[colIdx][i]
-					}
-				}
-				rows = append(rows, row)
-			}
-		}
-	}
+	columns, rows, err := framesToTabularRows(&resp)
+	require.NoError(t, err)
 
 	assert.Equal(t, []string{"name", "age"}, columns)
 	require.Len(t, rows, 2)
@@ -460,23 +437,11 @@ func TestAthenaQuery_FrameToRows(t *testing.T) {
 func TestAthenaQuery_EmptyFrame(t *testing.T) {
 	rawJSON := `{"results":{"A":{"status":200,"frames":[{"schema":{"fields":[{"name":"id","type":"number"}]},"data":{"values":[]}}]}}}`
 
-	var resp athenaQueryResponse
+	var resp dsQueryResponse
 	require.NoError(t, json.Unmarshal([]byte(rawJSON), &resp))
 
-	var rows []map[string]interface{}
-	for _, r := range resp.Results {
-		for _, frame := range r.Frames {
-			if len(frame.Data.Values) == 0 {
-				continue
-			}
-			rowCount := len(frame.Data.Values[0])
-			for i := 0; i < rowCount; i++ {
-				row := make(map[string]interface{})
-				rows = append(rows, row)
-			}
-		}
-	}
-
+	_, rows, err := framesToTabularRows(&resp)
+	require.NoError(t, err)
 	assert.Empty(t, rows)
 }
 
@@ -498,12 +463,6 @@ func TestAthenaQuery_ResultReuseInConnectionArgs(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	client := &athenaClient{
-		httpClient: http.DefaultClient,
-		baseURL:    ts.URL,
-		uid:        "test-uid",
-	}
-
 	from := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
 	to := time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC)
 	connArgs := map[string]interface{}{
@@ -511,7 +470,24 @@ func TestAthenaQuery_ResultReuseInConnectionArgs(t *testing.T) {
 		"resultReuseMaxAgeInMinutes": 60,
 	}
 
-	resp, err := client.query(t.Context(), "SELECT 1", from, to, connArgs)
+	payload := map[string]interface{}{
+		"queries": []map[string]interface{}{
+			{
+				"datasource": map[string]string{
+					"uid":  "test-uid",
+					"type": AthenaDatasourceType,
+				},
+				"rawSql":         "SELECT 1",
+				"refId":          "A",
+				"format":         AthenaFormatTable,
+				"connectionArgs": connArgs,
+			},
+		},
+		"from": strconv.FormatInt(from.UnixMilli(), 10),
+		"to":   strconv.FormatInt(to.UnixMilli(), 10),
+	}
+
+	resp, err := doDSQuery(t.Context(), http.DefaultClient, ts.URL, payload)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 }
@@ -519,7 +495,7 @@ func TestAthenaQuery_ResultReuseInConnectionArgs(t *testing.T) {
 func TestAthenaQuery_ErrorInResponse(t *testing.T) {
 	rawJSON := `{"results":{"A":{"error":"SYNTAX_ERROR: line 1:1: Table 'nonexistent' does not exist"}}}`
 
-	var resp athenaQueryResponse
+	var resp dsQueryResponse
 	require.NoError(t, json.Unmarshal([]byte(rawJSON), &resp))
 
 	for _, r := range resp.Results {

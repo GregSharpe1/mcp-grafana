@@ -344,39 +344,6 @@ type gcpMetricDescriptor struct {
 	ServiceShortName string `json:"serviceShortName,omitempty"`
 }
 
-// --- /api/ds/query response types ---
-
-type dsQueryResponse struct {
-	Results map[string]dsQueryResult `json:"results"`
-}
-
-type dsQueryResult struct {
-	Status int            `json:"status,omitempty"`
-	Frames []dsQueryFrame `json:"frames,omitempty"`
-	Error  string         `json:"error,omitempty"`
-}
-
-type dsQueryFrame struct {
-	Schema dsQueryFrameSchema `json:"schema"`
-	Data   dsQueryFrameData   `json:"data"`
-}
-
-type dsQueryFrameSchema struct {
-	Name   string              `json:"name,omitempty"`
-	RefID  string              `json:"refId,omitempty"`
-	Fields []dsQueryFrameField `json:"fields"`
-}
-
-type dsQueryFrameField struct {
-	Name   string            `json:"name"`
-	Type   string            `json:"type"`
-	Labels map[string]string `json:"labels,omitempty"`
-}
-
-type dsQueryFrameData struct {
-	Values [][]interface{} `json:"values"`
-}
-
 // --- Frame conversion ---
 
 // framesToPrometheusValue converts /api/ds/query response frames to Prometheus model values.
