@@ -91,6 +91,48 @@ func doDSQueryWithLimit(ctx context.Context, client *http.Client, baseURL string
 	return &queryResp, nil
 }
 
+// doDSQueryGeneric posts a payload to Grafana's /api/ds/query endpoint and
+// returns the raw "results" as a generic map, preserving the full JSON shape
+// (including zero-valued fields and any fields not captured by typed structs).
+// Falls back to returning the entire response if "results" is not a map.
+func doDSQueryGeneric(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}) (interface{}, error) {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling query payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/ds/query", bytes.NewReader(payloadBytes))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("executing request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, dsQueryResponseLimit))
+	if err != nil {
+		return nil, fmt.Errorf("reading response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("query returned status %d: %s", resp.StatusCode, string(body[:min(len(body), 1024)]))
+	}
+
+	var result map[string]interface{}
+	if err := unmarshalJSONWithLimitMsg(body, &result, dsQueryResponseLimit); err != nil {
+		return nil, err
+	}
+
+	if results, ok := result["results"].(map[string]interface{}); ok {
+		return results, nil
+	}
+	return result, nil
+}
+
 func trimTrailingSlash(s string) string {
 	for len(s) > 0 && s[len(s)-1] == '/' {
 		s = s[:len(s)-1]

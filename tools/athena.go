@@ -491,7 +491,9 @@ func queryAthena(ctx context.Context, args AthenaQueryParams) (*AthenaQueryResul
 	}
 
 	if result.RowCount == 0 {
-		result.Columns = []string{}
+		if result.Columns == nil {
+			result.Columns = []string{}
+		}
 		result.Rows = []map[string]interface{}{}
 		result.Hints = GenerateEmptyResultHints(HintContext{
 			DatasourceType: "athena",
