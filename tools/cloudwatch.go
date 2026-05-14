@@ -129,7 +129,12 @@ func (c *cloudWatchClient) query(ctx context.Context, args CloudWatchQueryParams
 		query["accountId"] = args.AccountId
 	}
 
-	return doDSQuery(ctx, c.httpClient, c.baseURL, dsQueryPayload(from, to, query))
+	httpClient, baseURL, err := newDSQueryHTTPClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return doDSQuery(ctx, httpClient, baseURL, dsQueryPayload(from, to, query))
 }
 
 // queryCloudWatch executes a CloudWatch query via Grafana
