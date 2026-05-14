@@ -493,6 +493,11 @@ func toFloat(v interface{}) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
 		return n, true
+	case *float64:
+		if n == nil {
+			return 0, false
+		}
+		return *n, true
 	case json.Number:
 		f, err := n.Float64()
 		return f, err == nil
