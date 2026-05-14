@@ -405,9 +405,17 @@ type AthenaQueryResult struct {
 }
 
 func queryAthena(ctx context.Context, args AthenaQueryParams) (*AthenaQueryResult, error) {
-	client, err := newAthenaClient(ctx, args.DatasourceUID)
+	ds, err := getDatasourceByUID(ctx, GetDatasourceByUIDParams{UID: args.DatasourceUID})
 	if err != nil {
 		return nil, fmt.Errorf("creating Athena client: %w", err)
+	}
+	if ds.Type != AthenaDatasourceType {
+		return nil, fmt.Errorf("datasource %s is of type %s, not %s", args.DatasourceUID, ds.Type, AthenaDatasourceType)
+	}
+
+	httpClient, baseURL, err := newDSQueryHTTPClient(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	now := time.Now()
@@ -458,7 +466,7 @@ func queryAthena(ctx context.Context, args AthenaQueryParams) (*AthenaQueryResul
 
 	payload := dsQueryPayload(fromTime, toTime, map[string]interface{}{
 		"datasource": map[string]string{
-			"uid":  client.uid,
+			"uid":  args.DatasourceUID,
 			"type": AthenaDatasourceType,
 		},
 		"rawSql":         processedQuery,
@@ -467,7 +475,7 @@ func queryAthena(ctx context.Context, args AthenaQueryParams) (*AthenaQueryResul
 		"connectionArgs": connectionArgs,
 	})
 
-	resp, err := doDSQuery(ctx, client.httpClient, client.baseURL, payload)
+	resp, err := doDSQuery(ctx, httpClient, baseURL, payload)
 	if err != nil {
 		return nil, err
 	}
