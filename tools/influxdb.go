@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -115,11 +114,7 @@ func buildInfluxDBPayload(datasourceUID, dialect, query string, from, to time.Ti
 		"maxDataPoints": maxDataPoints,
 	}
 
-	return map[string]interface{}{
-		"queries": []map[string]interface{}{q},
-		"from":    strconv.FormatInt(from.UnixMilli(), 10),
-		"to":      strconv.FormatInt(to.UnixMilli(), 10),
-	}
+	return dsQueryPayload(from, to, q)
 }
 
 func queryInfluxDB(ctx context.Context, args InfluxDBQueryParams) (*InfluxDBQueryResult, error) {

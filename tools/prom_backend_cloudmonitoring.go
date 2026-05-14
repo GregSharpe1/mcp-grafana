@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -119,13 +118,7 @@ func (b *cloudMonitoringBackend) Query(ctx context.Context, expr string, queryTy
 		},
 	}
 
-	payload := map[string]interface{}{
-		"queries": []interface{}{query},
-		"from":    strconv.FormatInt(start.UnixMilli(), 10),
-		"to":      strconv.FormatInt(end.UnixMilli(), 10),
-	}
-
-	resp, err := doDSQuery(ctx, b.httpClient, b.baseURL, payload)
+	resp, err := doDSQuery(ctx, b.httpClient, b.baseURL, dsQueryPayload(start, end, query))
 	if err != nil {
 		return nil, err
 	}
@@ -172,13 +165,7 @@ func (b *cloudMonitoringBackend) LabelNames(ctx context.Context, matchers []stri
 		},
 	}
 
-	payload := map[string]interface{}{
-		"queries": []interface{}{query},
-		"from":    strconv.FormatInt(start.UnixMilli(), 10),
-		"to":      strconv.FormatInt(end.UnixMilli(), 10),
-	}
-
-	resp, err := doDSQuery(ctx, b.httpClient, b.baseURL, payload)
+	resp, err := doDSQuery(ctx, b.httpClient, b.baseURL, dsQueryPayload(start, end, query))
 	if err != nil {
 		return nil, fmt.Errorf("querying label names: %w", err)
 	}
@@ -277,13 +264,7 @@ func (b *cloudMonitoringBackend) labelValuesViaQuery(ctx context.Context, labelN
 		},
 	}
 
-	payload := map[string]interface{}{
-		"queries": []interface{}{query},
-		"from":    strconv.FormatInt(start.UnixMilli(), 10),
-		"to":      strconv.FormatInt(end.UnixMilli(), 10),
-	}
-
-	resp, err := doDSQuery(ctx, b.httpClient, b.baseURL, payload)
+	resp, err := doDSQuery(ctx, b.httpClient, b.baseURL, dsQueryPayload(start, end, query))
 	if err != nil {
 		return nil, fmt.Errorf("querying label values: %w", err)
 	}

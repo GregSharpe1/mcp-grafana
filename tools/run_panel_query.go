@@ -512,14 +512,7 @@ func executeCloudWatchPanelQuery(ctx context.Context, datasourceUID string, pane
 		target["refId"] = "A"
 	}
 
-	// Build /api/ds/query payload
-	payload := map[string]interface{}{
-		"queries": []map[string]interface{}{target},
-		"from":    fmt.Sprintf("%d", startTime.UnixMilli()),
-		"to":      fmt.Sprintf("%d", endTime.UnixMilli()),
-	}
-
-	return executeGrafanaDSQuery(ctx, payload)
+	return executeGrafanaDSQuery(ctx, dsQueryPayload(startTime, endTime, target))
 }
 
 // executeInfluxDBQuery runs an InfluxDB panel query using queryInfluxDB. The

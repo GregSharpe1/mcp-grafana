@@ -456,22 +456,16 @@ func queryAthena(ctx context.Context, args AthenaQueryParams) (*AthenaQueryResul
 		}
 	}
 
-	payload := map[string]interface{}{
-		"queries": []map[string]interface{}{
-			{
-				"datasource": map[string]string{
-					"uid":  client.uid,
-					"type": AthenaDatasourceType,
-				},
-				"rawSql":         processedQuery,
-				"refId":          "A",
-				"format":         AthenaFormatTable,
-				"connectionArgs": connectionArgs,
-			},
+	payload := dsQueryPayload(fromTime, toTime, map[string]interface{}{
+		"datasource": map[string]string{
+			"uid":  client.uid,
+			"type": AthenaDatasourceType,
 		},
-		"from": strconv.FormatInt(fromTime.UnixMilli(), 10),
-		"to":   strconv.FormatInt(toTime.UnixMilli(), 10),
-	}
+		"rawSql":         processedQuery,
+		"refId":          "A",
+		"format":         AthenaFormatTable,
+		"connectionArgs": connectionArgs,
+	})
 
 	resp, err := doDSQuery(ctx, client.httpClient, client.baseURL, payload)
 	if err != nil {

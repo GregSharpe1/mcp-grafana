@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
@@ -14,6 +15,16 @@ import (
 )
 
 const dsQueryResponseLimit int64 = 10 * 1024 * 1024 // 10MB
+
+// dsQueryPayload builds the standard /api/ds/query request envelope.
+// Each query map should contain datasource-specific fields (refId, datasource, etc.).
+func dsQueryPayload(from, to time.Time, queries ...map[string]interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		"queries": queries,
+		"from":    strconv.FormatInt(from.UnixMilli(), 10),
+		"to":      strconv.FormatInt(to.UnixMilli(), 10),
+	}
+}
 
 // doDSQuery posts a payload to Grafana's /api/ds/query endpoint and decodes
 // the response into the SDK's QueryDataResponse type.

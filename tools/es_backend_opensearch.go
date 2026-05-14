@@ -85,18 +85,14 @@ func (b *openSearchBackend) Search(ctx context.Context, index, query string, sta
 		return nil, fmt.Errorf("the requested index %q is not compatible with this datasource's configured index pattern %q; use an index that matches the pattern or choose a different datasource", index, b.configuredIndex)
 	}
 
-	// Determine time range in milliseconds
-	var fromMs, toMs string
+	// Determine time range
+	from := time.Now().Add(-10 * 365 * 24 * time.Hour) // Default: 10 years ago
 	if startTime != nil {
-		fromMs = strconv.FormatInt(startTime.UnixMilli(), 10)
-	} else {
-		// Default to 10 years ago
-		fromMs = strconv.FormatInt(time.Now().Add(-10*365*24*time.Hour).UnixMilli(), 10)
+		from = *startTime
 	}
+	to := time.Now()
 	if endTime != nil {
-		toMs = strconv.FormatInt(endTime.UnixMilli(), 10)
-	} else {
-		toMs = strconv.FormatInt(time.Now().UnixMilli(), 10)
+		to = *endTime
 	}
 
 	// Use the user's query as-is. The OpenSearch plugin searches within the
@@ -107,34 +103,28 @@ func (b *openSearchBackend) Search(ctx context.Context, index, query string, sta
 	}
 
 	// Build the /api/ds/query payload using the OpenSearch plugin's query model
-	payload := map[string]interface{}{
-		"queries": []map[string]interface{}{
+	payload := dsQueryPayload(from, to, map[string]interface{}{
+		"refId": "A",
+		"datasource": map[string]interface{}{
+			"uid":  b.datasourceUID,
+			"type": openSearchDatasourceType,
+		},
+		"query":           luceneQuery,
+		"queryType":       "lucene",
+		"luceneQueryType": "RawDocument",
+		"timeField":       "@timestamp",
+		"metrics": []map[string]interface{}{
 			{
-				"refId": "A",
-				"datasource": map[string]interface{}{
-					"uid":  b.datasourceUID,
-					"type": openSearchDatasourceType,
+				"id":   "1",
+				"type": "raw_document",
+				"settings": map[string]interface{}{
+					"size": strconv.Itoa(limit),
 				},
-				"query":           luceneQuery,
-				"queryType":       "lucene",
-				"luceneQueryType": "RawDocument",
-				"timeField":       "@timestamp",
-				"metrics": []map[string]interface{}{
-					{
-						"id":   "1",
-						"type": "raw_document",
-						"settings": map[string]interface{}{
-							"size": strconv.Itoa(limit),
-						},
-					},
-				},
-				"bucketAggs": []interface{}{},
-				"format":     "table",
 			},
 		},
-		"from": fromMs,
-		"to":   toMs,
-	}
+		"bucketAggs": []interface{}{},
+		"format":     "table",
+	})
 
 	result, err := doDSQueryWithLimit(ctx, b.httpClient, b.baseURL, payload, 48*1024*1024)
 	if err != nil {

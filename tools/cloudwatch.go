@@ -129,13 +129,7 @@ func (c *cloudWatchClient) query(ctx context.Context, args CloudWatchQueryParams
 		query["accountId"] = args.AccountId
 	}
 
-	payload := map[string]interface{}{
-		"queries": []map[string]interface{}{query},
-		"from":    strconv.FormatInt(from.UnixMilli(), 10),
-		"to":      strconv.FormatInt(to.UnixMilli(), 10),
-	}
-
-	return doDSQuery(ctx, c.httpClient, c.baseURL, payload)
+	return doDSQuery(ctx, c.httpClient, c.baseURL, dsQueryPayload(from, to, query))
 }
 
 // queryCloudWatch executes a CloudWatch query via Grafana

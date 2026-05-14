@@ -185,21 +185,15 @@ func querySnowflake(ctx context.Context, args SnowflakeQueryParams) (*SnowflakeQ
 	processedQuery = substituteVariables(processedQuery, args.Variables)
 	processedQuery = enforceSnowflakeLimit(processedQuery, args.Limit)
 
-	payload := map[string]interface{}{
-		"queries": []map[string]interface{}{
-			{
-				"datasource": map[string]string{
-					"uid":  args.DatasourceUID,
-					"type": SnowflakeDatasourceType,
-				},
-				"rawSql": processedQuery,
-				"refId":  "A",
-				"format": SnowflakeFormatTable,
-			},
+	payload := dsQueryPayload(fromTime, toTime, map[string]interface{}{
+		"datasource": map[string]string{
+			"uid":  args.DatasourceUID,
+			"type": SnowflakeDatasourceType,
 		},
-		"from": strconv.FormatInt(fromTime.UnixMilli(), 10),
-		"to":   strconv.FormatInt(toTime.UnixMilli(), 10),
-	}
+		"rawSql": processedQuery,
+		"refId":  "A",
+		"format": SnowflakeFormatTable,
+	})
 
 	resp, err := doDSQuery(ctx, client, baseURL, payload)
 	if err != nil {

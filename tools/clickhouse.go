@@ -186,21 +186,15 @@ func queryClickHouse(ctx context.Context, args ClickHouseQueryParams) (*ClickHou
 	processedQuery = substituteVariables(processedQuery, args.Variables)
 	processedQuery = enforceClickHouseLimit(processedQuery, args.Limit)
 
-	payload := map[string]interface{}{
-		"queries": []map[string]interface{}{
-			{
-				"datasource": map[string]string{
-					"uid":  args.DatasourceUID,
-					"type": ClickHouseDatasourceType,
-				},
-				"rawSql": processedQuery,
-				"refId":  "A",
-				"format": ClickHouseFormatTable,
-			},
+	payload := dsQueryPayload(fromTime, toTime, map[string]interface{}{
+		"datasource": map[string]string{
+			"uid":  args.DatasourceUID,
+			"type": ClickHouseDatasourceType,
 		},
-		"from": strconv.FormatInt(fromTime.UnixMilli(), 10),
-		"to":   strconv.FormatInt(toTime.UnixMilli(), 10),
-	}
+		"rawSql": processedQuery,
+		"refId":  "A",
+		"format": ClickHouseFormatTable,
+	})
 
 	resp, err := doDSQuery(ctx, client, baseURL, payload)
 	if err != nil {
