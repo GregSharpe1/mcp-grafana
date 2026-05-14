@@ -465,6 +465,11 @@ func toMillis(v interface{}) (int64, bool) {
 		return i, err == nil
 	case time.Time:
 		return n.UnixMilli(), true
+	case *time.Time:
+		if n == nil {
+			return 0, false
+		}
+		return n.UnixMilli(), true
 	default:
 		return 0, false
 	}

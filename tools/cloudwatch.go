@@ -221,6 +221,11 @@ func queryCloudWatch(ctx context.Context, args CloudWatchQueryParams) (*CloudWat
 					ts = v
 				case time.Time:
 					ts = v.UnixMilli()
+				case *time.Time:
+					if v == nil {
+						continue
+					}
+					ts = v.UnixMilli()
 				default:
 					continue
 				}
