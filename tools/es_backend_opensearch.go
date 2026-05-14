@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path"
@@ -172,8 +173,23 @@ func framesToDocuments(frames data.Frames) ([]ElasticsearchDocument, error) {
 
 	for i := 0; i < rowCount; i++ {
 		rawDoc := frame.At(0, i)
-		docMap, ok := rawDoc.(map[string]interface{})
-		if !ok {
+
+		var docMap map[string]interface{}
+		switch v := rawDoc.(type) {
+		case json.RawMessage:
+			if err := json.Unmarshal(v, &docMap); err != nil {
+				continue
+			}
+		case *json.RawMessage:
+			if v == nil {
+				continue
+			}
+			if err := json.Unmarshal(*v, &docMap); err != nil {
+				continue
+			}
+		case map[string]interface{}:
+			docMap = v
+		default:
 			continue
 		}
 
