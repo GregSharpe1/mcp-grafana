@@ -153,7 +153,7 @@ func TestFramesToTabularRows_InfluxDB(t *testing.T) {
 
 	assert.Equal(t, []string{"Time", "value"}, cols)
 	require.Len(t, rows, 3)
-	assert.Equal(t, t1, rows[0]["Time"])
+	assert.Equal(t, float64(t1.UnixMilli()), rows[0]["Time"])
 	assert.Equal(t, 1.0, rows[0]["value"])
 	assert.Equal(t, 3.7, rows[2]["value"])
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
@@ -78,6 +79,51 @@ func newDSQueryHTTPClient(ctx context.Context) (*http.Client, string, error) {
 	return &http.Client{Transport: transport, Timeout: 30 * time.Second}, baseURL, nil
 }
 
+// normalizeValue converts SDK-typed values back to the JSON-basic types that
+// standard json.Unmarshal into interface{} would produce. This preserves the
+// MCP tool output contract established by the original per-datasource code
+// which decoded into [][]interface{} (yielding float64 for all numbers,
+// string for strings, nil for nulls, and no time.Time or pointer wrappers).
+func normalizeValue(v interface{}) interface{} {
+	if v == nil {
+		return nil
+	}
+	switch val := v.(type) {
+	case time.Time:
+		return float64(val.UnixMilli())
+	case *time.Time:
+		if val == nil {
+			return nil
+		}
+		return float64(val.UnixMilli())
+	case json.RawMessage:
+		var decoded interface{}
+		if json.Unmarshal(val, &decoded) == nil {
+			return decoded
+		}
+		return string(val)
+	case float64, string, bool:
+		return v
+	default:
+		rv := reflect.ValueOf(v)
+		if rv.Kind() == reflect.Ptr {
+			if rv.IsNil() {
+				return nil
+			}
+			return normalizeValue(rv.Elem().Interface())
+		}
+		switch rv.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			return float64(rv.Int())
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			return float64(rv.Uint())
+		case reflect.Float32:
+			return rv.Float()
+		}
+		return v
+	}
+}
+
 // framesToTabularRows converts SDK data frames into row-oriented maps — the
 // common format returned by ClickHouse, Snowflake, and Athena tools.
 func framesToTabularRows(resp *backend.QueryDataResponse) ([]string, []map[string]interface{}, error) {
@@ -100,7 +146,7 @@ func framesToTabularRows(resp *backend.QueryDataResponse) ([]string, []map[strin
 			for i := 0; i < rowCount; i++ {
 				row := make(map[string]interface{})
 				for colIdx, colName := range cols {
-					row[colName] = frame.At(colIdx, i)
+					row[colName] = normalizeValue(frame.At(colIdx, i))
 				}
 				rows = append(rows, row)
 			}
