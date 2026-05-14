@@ -456,6 +456,11 @@ func queryAthena(ctx context.Context, args AthenaQueryParams) (*AthenaQueryResul
 		}
 	}
 
+	httpClient, baseURL, err := newDSQueryHTTPClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	payload := dsQueryPayload(fromTime, toTime, map[string]interface{}{
 		"datasource": map[string]string{
 			"uid":  client.uid,
@@ -467,7 +472,7 @@ func queryAthena(ctx context.Context, args AthenaQueryParams) (*AthenaQueryResul
 		"connectionArgs": connectionArgs,
 	})
 
-	resp, err := doDSQuery(ctx, client.httpClient, client.baseURL, payload)
+	resp, err := doDSQuery(ctx, httpClient, baseURL, payload)
 	if err != nil {
 		return nil, err
 	}
