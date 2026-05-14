@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"net/url"
 	"testing"
+	"time"
 
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/data"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -249,41 +252,26 @@ func TestParseCloudWatchMetricsResponse(t *testing.T) {
 }
 
 func TestCloudWatchMultiFrameStatistics(t *testing.T) {
-	// Build a dsQueryResponse with 2 frames to verify statistics
+	// Build a backend.QueryDataResponse with 2 frames to verify statistics
 	// are accumulated across all frames, not just the last one.
-	f1 := dsQueryFrame{
-		Schema: dsQueryFrameSchema{
-			Fields: []dsQueryFrameField{
-				{Name: "Time", Type: "time"},
-				{Name: "Value", Type: "number"},
-			},
-		},
-		Data: dsQueryFrameData{
-			Values: [][]interface{}{
-				{float64(1000), float64(2000)}, // timestamps
-				{float64(10.0), float64(20.0)}, // values
-			},
-		},
-	}
+	t1 := time.UnixMilli(1000)
+	t2 := time.UnixMilli(2000)
+	t3 := time.UnixMilli(3000)
+	t4 := time.UnixMilli(4000)
 
-	f2 := dsQueryFrame{
-		Schema: dsQueryFrameSchema{
-			Fields: []dsQueryFrameField{
-				{Name: "Time", Type: "time"},
-				{Name: "Value", Type: "number"},
-			},
-		},
-		Data: dsQueryFrameData{
-			Values: [][]interface{}{
-				{float64(3000), float64(4000)}, // timestamps
-				{float64(5.0), float64(40.0)},  // values
-			},
-		},
-	}
+	f1 := data.NewFrame("",
+		data.NewField("Time", nil, []time.Time{t1, t2}),
+		data.NewField("Value", nil, []float64{10.0, 20.0}),
+	)
 
-	resp := &dsQueryResponse{
-		Results: map[string]dsQueryResult{
-			"A": {Frames: []dsQueryFrame{f1, f2}},
+	f2 := data.NewFrame("",
+		data.NewField("Time", nil, []time.Time{t3, t4}),
+		data.NewField("Value", nil, []float64{5.0, 40.0}),
+	)
+
+	resp := &backend.QueryDataResponse{
+		Responses: backend.Responses{
+			"A": backend.DataResponse{Frames: data.Frames{f1, f2}},
 		},
 	}
 
@@ -295,51 +283,55 @@ func TestCloudWatchMultiFrameStatistics(t *testing.T) {
 		Statistics: make(map[string]float64),
 	}
 
-	for _, r := range resp.Results {
+	for _, r := range resp.Responses {
 		var sum, min, max float64
 		var count int64
 		first := true
 
 		for _, frm := range r.Frames {
 			var timeColIdx, valueColIdx = -1, -1
-			for i, fld := range frm.Schema.Fields {
-				switch fld.Type {
-				case "time":
+			for i, fld := range frm.Fields {
+				switch {
+				case fld.Type() == data.FieldTypeTime || fld.Type() == data.FieldTypeNullableTime:
 					timeColIdx = i
-				case "number":
+				case fld.Type().Numeric():
 					valueColIdx = i
 				}
 			}
 			if timeColIdx == -1 || valueColIdx == -1 {
 				continue
 			}
-			if len(frm.Data.Values) > timeColIdx && len(frm.Data.Values) > valueColIdx {
-				timeValues := frm.Data.Values[timeColIdx]
-				metricValues := frm.Data.Values[valueColIdx]
-				for i := 0; i < len(timeValues) && i < len(metricValues); i++ {
-					ts, ok := timeValues[i].(float64)
-					if !ok {
-						continue
-					}
-					val, ok := metricValues[i].(float64)
-					if !ok {
-						continue
-					}
-					result.Timestamps = append(result.Timestamps, int64(ts))
-					result.Values = append(result.Values, val)
-					sum += val
-					count++
-					if first {
+			rowCount := frm.Rows()
+			for i := 0; i < rowCount; i++ {
+				tsRaw := frm.At(timeColIdx, i)
+				var ts int64
+				switch v := tsRaw.(type) {
+				case time.Time:
+					ts = v.UnixMilli()
+				case float64:
+					ts = int64(v)
+				default:
+					continue
+				}
+
+				val, ok := frm.At(valueColIdx, i).(float64)
+				if !ok {
+					continue
+				}
+				result.Timestamps = append(result.Timestamps, ts)
+				result.Values = append(result.Values, val)
+				sum += val
+				count++
+				if first {
+					min = val
+					max = val
+					first = false
+				} else {
+					if val < min {
 						min = val
+					}
+					if val > max {
 						max = val
-						first = false
-					} else {
-						if val < min {
-							min = val
-						}
-						if val > max {
-							max = val
-						}
 					}
 				}
 			}

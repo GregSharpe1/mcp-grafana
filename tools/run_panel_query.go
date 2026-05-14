@@ -554,7 +554,7 @@ func executeGrafanaDSQuery(ctx context.Context, payload map[string]interface{}) 
 		return nil, err
 	}
 
-	return resp.Results, nil
+	return resp.Responses, nil
 }
 
 // substituteGrafanaMacros substitutes Grafana temporal macros ($__range, $__rate_interval, $__interval)

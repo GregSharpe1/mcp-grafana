@@ -9,58 +9,20 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	mcpgrafana "github.com/grafana/mcp-grafana"
 )
 
-const dsQueryResponseLimit = 10 * 1024 * 1024 // 10MB
-
-// dsQueryResponse represents the standard response from Grafana's /api/ds/query endpoint.
-type dsQueryResponse struct {
-	Results map[string]dsQueryResult `json:"results"`
-}
-
-type dsQueryResult struct {
-	Status int            `json:"status,omitempty"`
-	Frames []dsQueryFrame `json:"frames,omitempty"`
-	Error  string         `json:"error,omitempty"`
-}
-
-type dsQueryFrame struct {
-	Schema dsQueryFrameSchema `json:"schema"`
-	Data   dsQueryFrameData   `json:"data"`
-}
-
-type dsQueryFrameSchema struct {
-	Name   string                 `json:"name,omitempty"`
-	RefID  string                 `json:"refId,omitempty"`
-	Meta   map[string]interface{} `json:"meta,omitempty"`
-	Fields []dsQueryFrameField    `json:"fields"`
-}
-
-type dsQueryFrameField struct {
-	Name     string                 `json:"name"`
-	Type     string                 `json:"type"`
-	Labels   map[string]string      `json:"labels,omitempty"`
-	Config   map[string]interface{} `json:"config,omitempty"`
-	TypeInfo struct {
-		Frame string `json:"frame,omitempty"`
-	} `json:"typeInfo,omitempty"`
-}
-
-type dsQueryFrameData struct {
-	Values   [][]interface{}        `json:"values"`
-	Nanos    [][]interface{}        `json:"nanos,omitempty"`
-	Entities map[string]interface{} `json:"entities,omitempty"`
-}
+const dsQueryResponseLimit int64 = 10 * 1024 * 1024 // 10MB
 
 // doDSQuery posts a payload to Grafana's /api/ds/query endpoint and decodes
-// the response into the shared dsQueryResponse type.
-func doDSQuery(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}) (*dsQueryResponse, error) {
+// the response into the SDK's QueryDataResponse type.
+func doDSQuery(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}) (*backend.QueryDataResponse, error) {
 	return doDSQueryWithLimit(ctx, client, baseURL, payload, dsQueryResponseLimit)
 }
 
 // doDSQueryWithLimit is like doDSQuery but allows overriding the response size limit.
-func doDSQueryWithLimit(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}, responseLimit int64) (*dsQueryResponse, error) {
+func doDSQueryWithLimit(ctx context.Context, client *http.Client, baseURL string, payload map[string]interface{}, responseLimit int64) (*backend.QueryDataResponse, error) {
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling query payload: %w", err)
@@ -87,9 +49,9 @@ func doDSQueryWithLimit(ctx context.Context, client *http.Client, baseURL string
 		return nil, fmt.Errorf("query returned status %d: %s", resp.StatusCode, string(body[:min(len(body), 1024)]))
 	}
 
-	var queryResp dsQueryResponse
-	if err := unmarshalJSONWithLimitMsg(body, &queryResp, int(responseLimit)); err != nil {
-		return nil, err
+	var queryResp backend.QueryDataResponse
+	if err := json.Unmarshal(body, &queryResp); err != nil {
+		return nil, fmt.Errorf("unmarshaling response: %w", err)
 	}
 
 	return &queryResp, nil
@@ -116,36 +78,29 @@ func newDSQueryHTTPClient(ctx context.Context) (*http.Client, string, error) {
 	return &http.Client{Transport: transport, Timeout: 30 * time.Second}, baseURL, nil
 }
 
-// framesToTabularRows converts columnar dsQueryFrame data into row-oriented
-// maps — the common format returned by ClickHouse, Snowflake, and Athena tools.
-// It returns the column names and the flattened rows.
-func framesToTabularRows(resp *dsQueryResponse) ([]string, []map[string]interface{}, error) {
+// framesToTabularRows converts SDK data frames into row-oriented maps — the
+// common format returned by ClickHouse, Snowflake, and Athena tools.
+func framesToTabularRows(resp *backend.QueryDataResponse) ([]string, []map[string]interface{}, error) {
 	columns := []string{}
 	rows := []map[string]interface{}{}
 
-	for refID, r := range resp.Results {
-		if r.Error != "" {
+	for refID, r := range resp.Responses {
+		if r.Error != nil {
 			return nil, nil, fmt.Errorf("query error (refId=%s): %s", refID, r.Error)
 		}
 
 		for _, frame := range r.Frames {
-			cols := make([]string, len(frame.Schema.Fields))
-			for i, field := range frame.Schema.Fields {
+			cols := make([]string, len(frame.Fields))
+			for i, field := range frame.Fields {
 				cols[i] = field.Name
 			}
 			columns = cols
 
-			if len(frame.Data.Values) == 0 {
-				continue
-			}
-
-			rowCount := len(frame.Data.Values[0])
+			rowCount := frame.Rows()
 			for i := 0; i < rowCount; i++ {
 				row := make(map[string]interface{})
 				for colIdx, colName := range cols {
-					if colIdx < len(frame.Data.Values) && i < len(frame.Data.Values[colIdx]) {
-						row[colName] = frame.Data.Values[colIdx][i]
-					}
+					row[colName] = frame.At(colIdx, i)
 				}
 				rows = append(rows, row)
 			}

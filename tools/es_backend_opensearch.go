@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/grafana/grafana-openapi-client-go/models"
+	"github.com/grafana/grafana-plugin-sdk-go/data"
 	mcpgrafana "github.com/grafana/mcp-grafana"
 )
 
@@ -67,7 +68,7 @@ func indexMatchesPattern(pattern, index string) bool {
 	}
 	// If the user's index is itself a pattern (contains wildcards), check
 	// whether the non-wildcard prefix matches the configured pattern's prefix.
-	// e.g., configured="logs-*", user="logs-2024*" → compatible.
+	// e.g., configured="logs-*", user="logs-2024*" -> compatible.
 	patternPrefix := strings.TrimRight(pattern, "*?")
 	indexPrefix := strings.TrimRight(index, "*?")
 	return strings.HasPrefix(indexPrefix, patternPrefix)
@@ -139,12 +140,12 @@ func (b *openSearchBackend) Search(ctx context.Context, index, query string, sta
 		return nil, err
 	}
 
-	queryResult, ok := result.Results["A"]
+	queryResult, ok := result.Responses["A"]
 	if !ok {
 		return nil, fmt.Errorf("no result found for refId A")
 	}
-	if queryResult.Error != "" {
-		return nil, fmt.Errorf("opensearch query error: %s", queryResult.Error)
+	if queryResult.Error != nil {
+		return nil, fmt.Errorf("opensearch query error: %s", queryResult.Error.Error())
 	}
 
 	return framesToDocuments(queryResult.Frames)
@@ -156,20 +157,21 @@ func (b *openSearchBackend) Search(ctx context.Context, index, query string, sta
 // The OpenSearch plugin returns a single frame with one column (named after the refId)
 // of type json.RawMessage. Each value in that column is a complete document object
 // containing _id, _index, _type, @timestamp (as array), and all source fields.
-func framesToDocuments(frames []dsQueryFrame) ([]ElasticsearchDocument, error) {
+func framesToDocuments(frames data.Frames) ([]ElasticsearchDocument, error) {
 	if len(frames) == 0 {
 		return []ElasticsearchDocument{}, nil
 	}
 
 	frame := frames[0]
-	if len(frame.Data.Values) == 0 || len(frame.Data.Values[0]) == 0 {
+	if len(frame.Fields) == 0 || frame.Rows() == 0 {
 		return []ElasticsearchDocument{}, nil
 	}
 
-	rawDocs := frame.Data.Values[0]
-	documents := make([]ElasticsearchDocument, 0, len(rawDocs))
+	rowCount := frame.Rows()
+	documents := make([]ElasticsearchDocument, 0, rowCount)
 
-	for _, rawDoc := range rawDocs {
+	for i := 0; i < rowCount; i++ {
+		rawDoc := frame.At(0, i)
 		docMap, ok := rawDoc.(map[string]interface{})
 		if !ok {
 			continue

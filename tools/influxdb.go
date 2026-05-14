@@ -190,7 +190,7 @@ func queryInfluxDB(ctx context.Context, args InfluxDBQueryParams) (*InfluxDBQuer
 
 	// Preserve the raw frames so callers that want the native
 	// Grafana shape (timestamps + labels per field) can still get it.
-	for _, r := range resp.Results {
+	for _, r := range resp.Responses {
 		if len(r.Frames) > 0 {
 			rawFramesJSON, err := json.Marshal(r.Frames)
 			if err == nil {

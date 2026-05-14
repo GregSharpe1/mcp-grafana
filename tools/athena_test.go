@@ -4,6 +4,7 @@ package tools
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -11,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/data"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -278,6 +281,15 @@ func TestSubstituteAthenaMacros_IntervalCalculation(t *testing.T) {
 	}
 }
 
+// marshalSDKResponse is a helper to properly marshal a backend.QueryDataResponse
+// for use as an HTTP response body in test servers.
+func marshalSDKResponse(t *testing.T, resp backend.QueryDataResponse) []byte {
+	t.Helper()
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	return b
+}
+
 func TestAthenaResource_CorrectURL(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/datasources/uid/test-uid/resources/catalogs", r.URL.Path)
@@ -351,8 +363,19 @@ func TestAthenaQuery_PayloadStructure(t *testing.T) {
 		assert.NotEmpty(t, payload["to"])
 
 		w.Header().Set("Content-Type", "application/json")
-		resp := `{"results":{"A":{"status":200,"frames":[{"schema":{"fields":[{"name":"name","type":"string"},{"name":"age","type":"number"}]},"data":{"values":[["Alice","Bob"],[30,25]]}}]}}}`
-		_, _ = w.Write([]byte(resp))
+		sdkResp := backend.QueryDataResponse{
+			Responses: backend.Responses{
+				"A": backend.DataResponse{
+					Frames: data.Frames{
+						data.NewFrame("",
+							data.NewField("name", nil, []string{"Alice", "Bob"}),
+							data.NewField("age", nil, []float64{30, 25}),
+						),
+					},
+				},
+			},
+		}
+		_, _ = w.Write(marshalSDKResponse(t, sdkResp))
 	}))
 	t.Cleanup(ts.Close)
 
@@ -384,7 +407,7 @@ func TestAthenaQuery_PayloadStructure(t *testing.T) {
 	resp, err := doDSQuery(t.Context(), http.DefaultClient, ts.URL, payload)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	assert.Len(t, resp.Results, 1)
+	assert.Len(t, resp.Responses, 1)
 }
 
 func TestAthenaQuery_NonOKStatus(t *testing.T) {
@@ -418,10 +441,26 @@ func TestAthenaQuery_NonOKStatus(t *testing.T) {
 }
 
 func TestAthenaQuery_FrameToRows(t *testing.T) {
-	rawJSON := `{"results":{"A":{"status":200,"frames":[{"schema":{"fields":[{"name":"name","type":"string"},{"name":"age","type":"number"}]},"data":{"values":[["Alice","Bob"],[30,25]]}}]}}}`
+	// Construct the response using SDK types to ensure proper marshal/unmarshal round-trip.
+	sdkResp := backend.QueryDataResponse{
+		Responses: backend.Responses{
+			"A": backend.DataResponse{
+				Frames: data.Frames{
+					data.NewFrame("",
+						data.NewField("name", nil, []string{"Alice", "Bob"}),
+						data.NewField("age", nil, []float64{30, 25}),
+					),
+				},
+			},
+		},
+	}
 
-	var resp dsQueryResponse
-	require.NoError(t, json.Unmarshal([]byte(rawJSON), &resp))
+	// Marshal and unmarshal to simulate JSON round-trip (as in real doDSQuery).
+	rawJSON, err := json.Marshal(sdkResp)
+	require.NoError(t, err)
+
+	var resp backend.QueryDataResponse
+	require.NoError(t, json.Unmarshal(rawJSON, &resp))
 
 	columns, rows, err := framesToTabularRows(&resp)
 	require.NoError(t, err)
@@ -435,10 +474,23 @@ func TestAthenaQuery_FrameToRows(t *testing.T) {
 }
 
 func TestAthenaQuery_EmptyFrame(t *testing.T) {
-	rawJSON := `{"results":{"A":{"status":200,"frames":[{"schema":{"fields":[{"name":"id","type":"number"}]},"data":{"values":[]}}]}}}`
+	sdkResp := backend.QueryDataResponse{
+		Responses: backend.Responses{
+			"A": backend.DataResponse{
+				Frames: data.Frames{
+					data.NewFrame("",
+						data.NewField("id", nil, []float64{}),
+					),
+				},
+			},
+		},
+	}
 
-	var resp dsQueryResponse
-	require.NoError(t, json.Unmarshal([]byte(rawJSON), &resp))
+	rawJSON, err := json.Marshal(sdkResp)
+	require.NoError(t, err)
+
+	var resp backend.QueryDataResponse
+	require.NoError(t, json.Unmarshal(rawJSON, &resp))
 
 	_, rows, err := framesToTabularRows(&resp)
 	require.NoError(t, err)
@@ -458,8 +510,14 @@ func TestAthenaQuery_ResultReuseInConnectionArgs(t *testing.T) {
 		assert.Equal(t, float64(60), connArgs["resultReuseMaxAgeInMinutes"])
 
 		w.Header().Set("Content-Type", "application/json")
-		resp := `{"results":{"A":{"status":200,"frames":[{"schema":{"fields":[]},"data":{"values":[]}}]}}}`
-		_, _ = w.Write([]byte(resp))
+		sdkResp := backend.QueryDataResponse{
+			Responses: backend.Responses{
+				"A": backend.DataResponse{
+					Frames: data.Frames{},
+				},
+			},
+		}
+		_, _ = w.Write(marshalSDKResponse(t, sdkResp))
 	}))
 	t.Cleanup(ts.Close)
 
@@ -493,13 +551,23 @@ func TestAthenaQuery_ResultReuseInConnectionArgs(t *testing.T) {
 }
 
 func TestAthenaQuery_ErrorInResponse(t *testing.T) {
-	rawJSON := `{"results":{"A":{"error":"SYNTAX_ERROR: line 1:1: Table 'nonexistent' does not exist"}}}`
+	// Construct with SDK types, marshal+unmarshal to simulate JSON round-trip.
+	sdkResp := backend.QueryDataResponse{
+		Responses: backend.Responses{
+			"A": backend.DataResponse{
+				Error: fmt.Errorf("SYNTAX_ERROR: line 1:1: Table 'nonexistent' does not exist"),
+			},
+		},
+	}
 
-	var resp dsQueryResponse
-	require.NoError(t, json.Unmarshal([]byte(rawJSON), &resp))
+	rawJSON, err := json.Marshal(sdkResp)
+	require.NoError(t, err)
 
-	for _, r := range resp.Results {
-		assert.NotEmpty(t, r.Error)
-		assert.Contains(t, r.Error, "does not exist")
+	var resp backend.QueryDataResponse
+	require.NoError(t, json.Unmarshal(rawJSON, &resp))
+
+	for _, r := range resp.Responses {
+		assert.NotNil(t, r.Error)
+		assert.Contains(t, r.Error.Error(), "does not exist")
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/data"
 	mcpgrafana "github.com/grafana/mcp-grafana"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -82,7 +84,7 @@ func newCloudWatchClient(ctx context.Context, uid string) (*cloudWatchClient, er
 }
 
 // query executes a CloudWatch query via Grafana's /api/ds/query endpoint
-func (c *cloudWatchClient) query(ctx context.Context, args CloudWatchQueryParams, from, to time.Time) (*dsQueryResponse, error) {
+func (c *cloudWatchClient) query(ctx context.Context, args CloudWatchQueryParams, from, to time.Time) (*backend.QueryDataResponse, error) {
 	// Format dimensions for CloudWatch query
 	// CloudWatch expects dimensions as map[string][]string
 	dimensions := make(map[string][]string)
@@ -183,9 +185,9 @@ func queryCloudWatch(ctx context.Context, args CloudWatchQueryParams) (*CloudWat
 	}
 
 	// Check for errors in the response
-	for refID, r := range resp.Results {
-		if r.Error != "" {
-			return nil, fmt.Errorf("query error (refId=%s): %s", refID, r.Error)
+	for refID, r := range resp.Responses {
+		if r.Error != nil {
+			return nil, fmt.Errorf("query error (refId=%s): %s", refID, r.Error.Error())
 		}
 
 		// Process frames - accumulate statistics across all frames
@@ -196,17 +198,15 @@ func queryCloudWatch(ctx context.Context, args CloudWatchQueryParams) (*CloudWat
 		for _, frame := range r.Frames {
 			// Find time and value columns
 			var timeColIdx, valueColIdx = -1, -1
-			for i, field := range frame.Schema.Fields {
-				switch field.Type {
-				case "time":
+			for i, field := range frame.Fields {
+				switch {
+				case field.Type() == data.FieldTypeTime || field.Type() == data.FieldTypeNullableTime:
 					timeColIdx = i
-				case "number":
+				case field.Type().Numeric():
 					valueColIdx = i
 					// Update label if available from field config
-					if field.Config != nil {
-						if displayName, ok := field.Config["displayNameFromDS"].(string); ok && displayName != "" {
-							result.Label = displayName
-						}
+					if field.Config != nil && field.Config.DisplayNameFromDS != "" {
+						result.Label = field.Config.DisplayNameFromDS
 					}
 				}
 			}
@@ -216,52 +216,55 @@ func queryCloudWatch(ctx context.Context, args CloudWatchQueryParams) (*CloudWat
 			}
 
 			// Extract data
-			if len(frame.Data.Values) > timeColIdx && len(frame.Data.Values) > valueColIdx {
-				timeValues := frame.Data.Values[timeColIdx]
-				metricValues := frame.Data.Values[valueColIdx]
+			rowCount := frame.Rows()
+			for i := 0; i < rowCount; i++ {
+				// Parse timestamp (can be float64 or int64 from JSON)
+				var ts int64
+				switch v := frame.At(timeColIdx, i).(type) {
+				case float64:
+					ts = int64(v)
+				case int64:
+					ts = v
+				case time.Time:
+					ts = v.UnixMilli()
+				default:
+					continue
+				}
 
-				for i := 0; i < len(timeValues) && i < len(metricValues); i++ {
-					// Parse timestamp (can be float64 or int64 from JSON)
-					var ts int64
-					switch v := timeValues[i].(type) {
-					case float64:
-						ts = int64(v)
-					case int64:
-						ts = v
-					default:
+				// Parse value
+				var val float64
+				switch v := frame.At(valueColIdx, i).(type) {
+				case float64:
+					val = v
+				case int64:
+					val = float64(v)
+				case *float64:
+					if v == nil {
 						continue
 					}
+					val = *v
+				case nil:
+					continue
+				default:
+					continue
+				}
 
-					// Parse value
-					var val float64
-					switch v := metricValues[i].(type) {
-					case float64:
-						val = v
-					case int64:
-						val = float64(v)
-					case nil:
-						continue
-					default:
-						continue
-					}
+				result.Timestamps = append(result.Timestamps, ts)
+				result.Values = append(result.Values, val)
 
-					result.Timestamps = append(result.Timestamps, ts)
-					result.Values = append(result.Values, val)
-
-					// Calculate statistics
-					sum += val
-					count++
-					if first {
+				// Calculate statistics
+				sum += val
+				count++
+				if first {
+					min = val
+					max = val
+					first = false
+				} else {
+					if val < min {
 						min = val
+					}
+					if val > max {
 						max = val
-						first = false
-					} else {
-						if val < min {
-							min = val
-						}
-						if val > max {
-							max = val
-						}
 					}
 				}
 			}

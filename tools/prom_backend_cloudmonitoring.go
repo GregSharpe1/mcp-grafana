@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/grafana/grafana-openapi-client-go/models"
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/data"
 	mcpgrafana "github.com/grafana/mcp-grafana"
 	promv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
@@ -347,8 +349,8 @@ type gcpMetricDescriptor struct {
 // --- Frame conversion ---
 
 // framesToPrometheusValue converts /api/ds/query response frames to Prometheus model values.
-func framesToPrometheusValue(resp *dsQueryResponse, queryType string) (model.Value, error) {
-	r, ok := resp.Results["A"]
+func framesToPrometheusValue(resp *backend.QueryDataResponse, queryType string) (model.Value, error) {
+	r, ok := resp.Responses["A"]
 	if !ok {
 		if queryType == "instant" {
 			return model.Vector{}, nil
@@ -356,8 +358,8 @@ func framesToPrometheusValue(resp *dsQueryResponse, queryType string) (model.Val
 		return model.Matrix{}, nil
 	}
 
-	if r.Error != "" {
-		return nil, fmt.Errorf("query error: %s", r.Error)
+	if r.Error != nil {
+		return nil, fmt.Errorf("query error: %s", r.Error.Error())
 	}
 
 	if queryType == "instant" {
@@ -366,32 +368,31 @@ func framesToPrometheusValue(resp *dsQueryResponse, queryType string) (model.Val
 	return framesToMatrix(r.Frames)
 }
 
-func framesToMatrix(frames []dsQueryFrame) (model.Matrix, error) {
+func framesToMatrix(frames data.Frames) (model.Matrix, error) {
 	var matrix model.Matrix
 	for _, frame := range frames {
-		timeIdx, valueIdx := findTimeAndValueFields(frame.Schema.Fields)
+		timeIdx, valueIdx := findTimeAndValueFields(frame.Fields)
 		if timeIdx == -1 || valueIdx == -1 {
 			continue
 		}
-		if len(frame.Data.Values) <= timeIdx || len(frame.Data.Values) <= valueIdx {
+		if len(frame.Fields) <= timeIdx || len(frame.Fields) <= valueIdx {
 			continue
 		}
 
-		metric := buildMetricFromLabels(frame.Schema.Fields[valueIdx].Labels, frame.Schema.Name)
-		timeValues := frame.Data.Values[timeIdx]
-		metricValues := frame.Data.Values[valueIdx]
+		metric := buildMetricFromLabels(frame.Fields[valueIdx].Labels, frame.Name)
 
+		rowCount := frame.Rows()
 		ss := &model.SampleStream{
 			Metric: metric,
-			Values: make([]model.SamplePair, 0, len(timeValues)),
+			Values: make([]model.SamplePair, 0, rowCount),
 		}
 
-		for i := 0; i < len(timeValues) && i < len(metricValues); i++ {
-			ts, tsOk := toMillis(timeValues[i])
+		for i := 0; i < rowCount; i++ {
+			ts, tsOk := toMillis(frame.At(timeIdx, i))
 			if !tsOk {
 				continue
 			}
-			val, valOk := toFloat(metricValues[i])
+			val, valOk := toFloat(frame.At(valueIdx, i))
 			if !valOk {
 				continue
 			}
@@ -409,34 +410,33 @@ func framesToMatrix(frames []dsQueryFrame) (model.Matrix, error) {
 	return matrix, nil
 }
 
-func framesToVector(frames []dsQueryFrame) (model.Vector, error) {
+func framesToVector(frames data.Frames) (model.Vector, error) {
 	var vector model.Vector
 	for _, frame := range frames {
-		timeIdx, valueIdx := findTimeAndValueFields(frame.Schema.Fields)
+		timeIdx, valueIdx := findTimeAndValueFields(frame.Fields)
 		if timeIdx == -1 || valueIdx == -1 {
 			continue
 		}
-		if len(frame.Data.Values) <= timeIdx || len(frame.Data.Values) <= valueIdx {
+		if len(frame.Fields) <= timeIdx || len(frame.Fields) <= valueIdx {
 			continue
 		}
 
-		timeValues := frame.Data.Values[timeIdx]
-		metricValues := frame.Data.Values[valueIdx]
-		if len(timeValues) == 0 || len(metricValues) == 0 {
+		rowCount := frame.Rows()
+		if rowCount == 0 {
 			continue
 		}
 
-		lastIdx := len(timeValues) - 1
-		ts, tsOk := toMillis(timeValues[lastIdx])
+		lastIdx := rowCount - 1
+		ts, tsOk := toMillis(frame.At(timeIdx, lastIdx))
 		if !tsOk {
 			continue
 		}
-		val, valOk := toFloat(metricValues[lastIdx])
+		val, valOk := toFloat(frame.At(valueIdx, lastIdx))
 		if !valOk {
 			continue
 		}
 
-		metric := buildMetricFromLabels(frame.Schema.Fields[valueIdx].Labels, frame.Schema.Name)
+		metric := buildMetricFromLabels(frame.Fields[valueIdx].Labels, frame.Name)
 		vector = append(vector, &model.Sample{
 			Metric:    metric,
 			Timestamp: model.Time(ts),
@@ -449,21 +449,22 @@ func framesToVector(frames []dsQueryFrame) (model.Vector, error) {
 	return vector, nil
 }
 
-func findTimeAndValueFields(fields []dsQueryFrameField) (timeIdx, valueIdx int) {
+func findTimeAndValueFields(fields []*data.Field) (timeIdx, valueIdx int) {
 	timeIdx = -1
 	valueIdx = -1
 	for i, f := range fields {
-		switch f.Type {
-		case "time":
+		ft := f.Type()
+		switch {
+		case ft == data.FieldTypeTime || ft == data.FieldTypeNullableTime:
 			timeIdx = i
-		case "number", "float64", "int64":
+		case ft.Numeric():
 			valueIdx = i
 		}
 	}
 	return
 }
 
-func buildMetricFromLabels(labels map[string]string, name string) model.Metric {
+func buildMetricFromLabels(labels data.Labels, name string) model.Metric {
 	metric := make(model.Metric, len(labels)+1)
 	if name != "" {
 		metric["__name__"] = model.LabelValue(name)
@@ -481,6 +482,8 @@ func toMillis(v interface{}) (int64, bool) {
 	case json.Number:
 		i, err := n.Int64()
 		return i, err == nil
+	case time.Time:
+		return n.UnixMilli(), true
 	default:
 		return 0, false
 	}
@@ -501,15 +504,15 @@ func toFloat(v interface{}) (float64, bool) {
 }
 
 // extractLabelNamesFromFrames extracts unique label keys from HEADERS query frames.
-func extractLabelNamesFromFrames(resp *dsQueryResponse) []string {
+func extractLabelNamesFromFrames(resp *backend.QueryDataResponse) []string {
 	seen := make(map[string]bool)
-	r, ok := resp.Results["A"]
+	r, ok := resp.Responses["A"]
 	if !ok {
 		return nil
 	}
 
 	for _, frame := range r.Frames {
-		for _, field := range frame.Schema.Fields {
+		for _, field := range frame.Fields {
 			for k := range field.Labels {
 				if !seen[k] {
 					seen[k] = true
@@ -526,15 +529,15 @@ func extractLabelNamesFromFrames(resp *dsQueryResponse) []string {
 }
 
 // extractLabelValuesFromFrames extracts unique values for a label from HEADERS query frames.
-func extractLabelValuesFromFrames(resp *dsQueryResponse, labelName string) []string {
+func extractLabelValuesFromFrames(resp *backend.QueryDataResponse, labelName string) []string {
 	seen := make(map[string]bool)
-	r, ok := resp.Results["A"]
+	r, ok := resp.Responses["A"]
 	if !ok {
 		return nil
 	}
 
 	for _, frame := range r.Frames {
-		for _, field := range frame.Schema.Fields {
+		for _, field := range frame.Fields {
 			if v, ok := field.Labels[labelName]; ok && !seen[v] {
 				seen[v] = true
 			}

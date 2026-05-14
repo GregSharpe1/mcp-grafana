@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/data"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -128,27 +130,20 @@ func TestBuildInfluxDBPayload_SerializesToValidJSON(t *testing.T) {
 }
 
 func TestFramesToTabularRows_InfluxDB(t *testing.T) {
-	resp := &dsQueryResponse{
-		Results: map[string]dsQueryResult{
-			"A": {
-				Frames: []dsQueryFrame{
-					{
-						Schema: dsQueryFrameSchema{
-							Name:  "A",
-							RefID: "A",
-							Fields: []dsQueryFrameField{
-								{Name: "Time", Type: "time"},
-								{Name: "value", Type: "number"},
-							},
-						},
-						Data: dsQueryFrameData{
-							Values: [][]interface{}{
-								{float64(1705312800000), float64(1705312860000), float64(1705312920000)},
-								{1.0, 2.5, 3.7},
-							},
-						},
-					},
-				},
+	t1 := time.UnixMilli(1705312800000)
+	t2 := time.UnixMilli(1705312860000)
+	t3 := time.UnixMilli(1705312920000)
+
+	frame := data.NewFrame("A",
+		data.NewField("Time", nil, []time.Time{t1, t2, t3}),
+		data.NewField("value", nil, []float64{1.0, 2.5, 3.7}),
+	)
+	frame.RefID = "A"
+
+	resp := &backend.QueryDataResponse{
+		Responses: backend.Responses{
+			"A": backend.DataResponse{
+				Frames: data.Frames{frame},
 			},
 		},
 	}
@@ -158,27 +153,20 @@ func TestFramesToTabularRows_InfluxDB(t *testing.T) {
 
 	assert.Equal(t, []string{"Time", "value"}, cols)
 	require.Len(t, rows, 3)
-	assert.Equal(t, float64(1705312800000), rows[0]["Time"])
+	assert.Equal(t, t1, rows[0]["Time"])
 	assert.Equal(t, 1.0, rows[0]["value"])
 	assert.Equal(t, 3.7, rows[2]["value"])
 }
 
 func TestFramesToTabularRows_EmptyFrame(t *testing.T) {
-	resp := &dsQueryResponse{
-		Results: map[string]dsQueryResult{
-			"A": {
-				Frames: []dsQueryFrame{
-					{
-						Schema: dsQueryFrameSchema{
-							Fields: []dsQueryFrameField{
-								{Name: "Time"},
-							},
-						},
-						Data: dsQueryFrameData{
-							Values: [][]interface{}{},
-						},
-					},
-				},
+	frame := data.NewFrame("",
+		data.NewField("Time", nil, []time.Time{}),
+	)
+
+	resp := &backend.QueryDataResponse{
+		Responses: backend.Responses{
+			"A": backend.DataResponse{
+				Frames: data.Frames{frame},
 			},
 		},
 	}
