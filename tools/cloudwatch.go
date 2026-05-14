@@ -214,16 +214,21 @@ func queryCloudWatch(ctx context.Context, args CloudWatchQueryParams) (*CloudWat
 			for i := 0; i < rowCount; i++ {
 				// Parse timestamp (can be float64 or int64 from JSON)
 				var ts int64
-				switch v := frame.At(timeColIdx, i).(type) {
-				case float64:
-					ts = int64(v)
-				case int64:
-					ts = v
-				case time.Time:
-					ts = v.UnixMilli()
-				default:
+			switch v := frame.At(timeColIdx, i).(type) {
+			case float64:
+				ts = int64(v)
+			case int64:
+				ts = v
+			case time.Time:
+				ts = v.UnixMilli()
+			case *time.Time:
+				if v == nil {
 					continue
 				}
+				ts = v.UnixMilli()
+			default:
+				continue
+			}
 
 				// Parse value
 				var val float64
